@@ -19,8 +19,10 @@ iPolloWork host on `127.0.0.1:8787`.
 | File | Purpose |
 | --- | --- |
 | `Dockerfile` | Multi-stage build: compiles `@ipollowork/app` (web UI) plus the `ipollowork-server` and `ipollowork-orchestrator` binaries from source, then assembles the nginx runtime image. |
-| `nginx.conf` | Static SPA + reverse proxy to the host (SSE/WebSocket safe). |
+| `nginx.conf` | Static SPA + reverse proxy to the host (SSE/WebSocket safe, gzip_static for the pre-compressed bundles). |
 | `entrypoint.sh` | Patches the built bundle with the runtime public origin and client token, starts the host, then runs nginx. |
+| `patches/` | Local fixes applied to the pinned upstream commit (`patches/README.md` explains each one). |
+| `verification/` | Render check, screenshot script, and the recorded verification results. |
 
 ## Build notes
 
@@ -74,3 +76,18 @@ With `IPOLLOWORK_EMBED_TOKEN=1` anyone who can load the site gets the client
 token and therefore agent execution on this instance. Keep the URL private,
 keep approval mode `manual`, and rotate `IPOLLOWORK_TOKEN` (and the tokens
 stored under `/data`) if the link leaks.
+
+## Verified deployment
+
+`verification/RESULTS.md` records the checks run against the live instance:
+the REST surface and every `/opencode/*` route return 200, an OpenCode session
+can be created and deleted through the public origin, and a headless browser
+renders the full app shell (screenshot: `verification/ipollowork-web-ui.png`).
+
+Re-run the browser check with a local headless Chrome:
+
+```
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --user-data-dir=/tmp/ipollowork-chrome --remote-debugging-port=9224 about:blank &
+node verification/render-check.mjs https://<service-domain>/ 9224
+```
