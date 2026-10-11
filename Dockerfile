@@ -80,6 +80,12 @@ COPY --from=build /src/apps/orchestrator/dist/bin/ipollowork /opt/ipollowork/ipo
 COPY --from=build /out/server /opt/ipollowork/server
 COPY --from=build /src/apps/app/dist /usr/share/nginx/html
 
+# The built server resolves two things from outside its own package:
+#   ../../../constants.json          -> /opt/constants.json
+#   ../../../examples/plugin-packages -> /opt/ipollowork/examples/plugin-packages
+COPY --from=build /src/constants.json /opt/constants.json
+COPY --from=build /src/examples/plugin-packages /opt/ipollowork/examples/plugin-packages
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY entrypoint.sh /opt/ipollowork/entrypoint.sh
 RUN chmod +x /opt/ipollowork/entrypoint.sh /opt/ipollowork/ipollowork
