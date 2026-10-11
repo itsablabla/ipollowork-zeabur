@@ -16,6 +16,11 @@ replace_placeholder() {
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     sed -i "s|${placeholder}|${value}|g" "$file"
+    # Assets are precompressed in the image and served through gzip_static, so
+    # any sibling .gz would otherwise keep serving the placeholder text.
+    if [ -f "${file}.gz" ]; then
+      gzip -9 -f -k "$file"
+    fi
   done < <(grep -rl -- "$placeholder" "$WEB_ROOT" 2>/dev/null || true)
 }
 

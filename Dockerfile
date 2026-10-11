@@ -53,6 +53,15 @@ RUN pnpm --filter @ipollowork/types build \
     VITE_IPOLLOWORK_TOKEN="__IPOLLOWORK_TOKEN__" \
     pnpm --filter @ipollowork/app build
 
+# The UI is ~28 MB of assets and the main bundle alone is ~10 MB. Compressing
+# them at build time (nginx serves them with gzip_static) keeps the runtime off
+# the compression path, which is much faster to deliver on a small container.
+RUN cd apps/app/dist \
+ && find . -type f -size +1k \
+      \( -name '*.js' -o -name '*.mjs' -o -name '*.css' -o -name '*.html' \
+         -o -name '*.json' -o -name '*.svg' -o -name '*.txt' -o -name '*.wasm' \) \
+      -exec gzip -9 -k {} +
+
 # The orchestrator is self-contained when compiled, so a single binary is enough.
 # Build it before `pnpm deploy`, which rewrites the workspace's node_modules.
 RUN pnpm --filter ipollowork-orchestrator build:bin
