@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Container entrypoint: patch the built web bundle with runtime values,
-# start the iPolloWork headless host, then run nginx in the foreground.
+# start nginx (so platform probes pass immediately), start the iPolloWork
+# headless host, and stay attached to the host process.
 set -euo pipefail
 
 WEB_ROOT="${IPOLLOWORK_WEB_ROOT:-/usr/share/nginx/html}"
 HOST_PORT="${IPOLLOWORK_PORT:-8787}"
 HTTP_PORT="${IPOLLOWORK_HTTP_PORT:-8080}"
+SERVER_BIN="${IPOLLOWORK_SERVER_BIN:-/opt/ipollowork/server/dist/cli.js}"
 
 log() { printf '[ipollowork] %s\n' "$*"; }
 
@@ -45,7 +47,10 @@ mkdir -p \
   "${IPOLLOWORK_SIDECAR_DIR:-/data/sidecars}" \
   "${IPOLLOWORK_WORKSPACE:-/workspace}"
 
-export IPOLLOWORK_BUNDLED_TEMPLATES_DIR="${IPOLLOWORK_BUNDLED_TEMPLATES_DIR:-/opt/ipollowork/bundled-templates}"
+# ------------------------------------------------------------------------- nginx
+log "starting nginx on ${HTTP_PORT}"
+nginx -g 'daemon off;' &
+NGINX_PID=$!
 
 # ------------------------------------------------------------------ host process
 OPENCODE_ARGS=()
@@ -54,7 +59,7 @@ if [ -x /usr/local/bin/opencode ]; then
   log "using opencode at /usr/local/bin/opencode"
 fi
 
-log "starting iPolloWork host on 127.0.0.1:${HOST_PORT}"
+log "starting iPolloWork host on 127.0.0.1:${HOST_PORT} (server: ${SERVER_BIN})"
 /opt/ipollowork/ipollowork serve \
   --workspace "${IPOLLOWORK_WORKSPACE:-/workspace}" \
   --remote-access \
@@ -65,18 +70,17 @@ log "starting iPolloWork host on 127.0.0.1:${HOST_PORT}"
   --cors '*' \
   --approval "${IPOLLOWORK_APPROVAL_MODE:-manual}" \
   --allow-external \
-  --ipollowork-server-bin /opt/ipollowork/ipollowork-server \
+  --sidecar-source external \
+  --ipollowork-server-bin "${SERVER_BIN}" \
   "${OPENCODE_ARGS[@]}" &
 HOST_PID=$!
 
 cleanup() {
-  if kill -0 "$HOST_PID" 2>/dev/null; then
-    kill "$HOST_PID" 2>/dev/null || true
-  fi
+  kill "$HOST_PID" "$NGINX_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-for _ in $(seq 1 90); do
+for _ in $(seq 1 120); do
   if curl -fsS "http://127.0.0.1:${HOST_PORT}/health" >/dev/null 2>&1; then
     log "iPolloWork host is healthy"
     break
@@ -89,5 +93,4 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 
-log "starting nginx on ${HTTP_PORT}"
-nginx -g 'daemon off;'
+wait "$HOST_PID"

@@ -32,9 +32,19 @@ Dockerfile builds both from the cloned source instead:
 ```
 pnpm --filter @ipollowork/types build
 VITE_IPOLLOWORK_DEPLOYMENT=web pnpm --filter @ipollowork/app build
-pnpm --filter ipollowork-server build:bin
+pnpm --filter ipollowork-server build
+pnpm --filter ipollowork-server deploy --prod --legacy /out/server
 pnpm --filter ipollowork-orchestrator build:bin
 ```
+
+Two details that matter:
+
+- The server runs on **Node**, from the `pnpm deploy` output, because the
+  Bun-compiled binary (`build:bin`) cannot resolve `sharp`'s native module and
+  the server imports `sharp` at startup. The build asserts `sharp` resolves.
+- The orchestrator is started with `--sidecar-source external
+  --ipollowork-server-bin /opt/ipollowork/server/dist/cli.js`, otherwise it
+  looks for a bundled/downloaded server binary and never starts one.
 
 ## Required service configuration (Zeabur)
 
