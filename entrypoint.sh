@@ -60,6 +60,14 @@ if [ -x /usr/local/bin/opencode ]; then
 fi
 
 log "starting iPolloWork host on 127.0.0.1:${HOST_PORT} (server: ${SERVER_BIN})"
+# The orchestrator's own output is the only place that reports why startup stalls,
+# and the platform log stream is not always readable, so keep a copy on the
+# persistent volume and mirror it to stdout.
+HOST_LOG="${IPOLLOWORK_HOST_LOG:-/data/orchestrator.log}"
+mkdir -p "$(dirname "$HOST_LOG")" 2>/dev/null || true
+: > "$HOST_LOG" 2>/dev/null || true
+log "capturing host output in ${HOST_LOG}"
+
 /opt/ipollowork/ipollowork serve \
   --workspace "${IPOLLOWORK_WORKSPACE:-/workspace}" \
   --remote-access \
@@ -72,11 +80,14 @@ log "starting iPolloWork host on 127.0.0.1:${HOST_PORT} (server: ${SERVER_BIN})"
   --allow-external \
   --sidecar-source external \
   --ipollowork-server-bin "${SERVER_BIN}" \
-  "${OPENCODE_ARGS[@]}" &
+  "${OPENCODE_ARGS[@]}" >>"$HOST_LOG" 2>&1 &
 HOST_PID=$!
 
+tail -n +1 -F "$HOST_LOG" 2>/dev/null &
+TAIL_PID=$!
+
 cleanup() {
-  kill "$HOST_PID" "$NGINX_PID" 2>/dev/null || true
+  kill "$HOST_PID" "$TAIL_PID" "$NGINX_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -87,10 +98,16 @@ for _ in $(seq 1 120); do
   fi
   if ! kill -0 "$HOST_PID" 2>/dev/null; then
     log "iPolloWork host exited during startup"
+    tail -n 40 "$HOST_LOG" 2>/dev/null || true
     wait "$HOST_PID" || true
     exit 1
   fi
   sleep 1
 done
+
+if ! curl -fsS "http://127.0.0.1:${HOST_PORT}/health" >/dev/null 2>&1; then
+  log "iPolloWork host did not answer /health within 120s; last output:"
+  tail -n 40 "$HOST_LOG" 2>/dev/null || true
+fi
 
 wait "$HOST_PID"
