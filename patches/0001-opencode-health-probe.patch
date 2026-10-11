@@ -1,12 +1,27 @@
 diff --git a/apps/orchestrator/src/cli.ts b/apps/orchestrator/src/cli.ts
-index 3f9342d..1a190ae 100644
+index 3f9342d..09700f4 100644
 --- a/apps/orchestrator/src/cli.ts
 +++ b/apps/orchestrator/src/cli.ts
-@@ -2871,12 +2871,42 @@ async function waitForHealthy(
+@@ -118,6 +118,9 @@ const INTERNAL_OPENCODE_CREDENTIALS_ENV =
+   "IPOLLOWORK_INTERNAL_ALLOW_OPENCODE_CREDENTIALS";
+ const DEFAULT_OPENCODE_HOT_RELOAD_DEBOUNCE_MS = 700;
+ const DEFAULT_OPENCODE_HOT_RELOAD_COOLDOWN_MS = 1500;
++// How long to wait for a direct OpenCode health probe before starting services
++// anyway (see waitForOpencodeHealthy).
++const DEGRADED_OPENCODE_PROBE_MS = 6_000;
+ const DEFAULT_ACTIVITY_WINDOW_MS = 5 * 60_000;
+ const DEFAULT_ACTIVITY_HEARTBEAT_INTERVAL_MS = 5 * 60_000;
+ 
+@@ -2871,12 +2874,59 @@ async function waitForHealthy(
  
  async function waitForOpencodeHealthy(
    client: ReturnType<typeof createOpencodeClient>,
-+  probe?: { baseUrl?: string; username?: string; password?: string },
++  probe?: {
++    baseUrl?: string;
++    username?: string;
++    password?: string;
++    probeTimeoutMs?: number;
++  },
    timeoutMs = 10_000,
    pollMs = 250,
  ) {
@@ -15,28 +30,40 @@ index 3f9342d..1a190ae 100644
 +  const probeUrl = probe?.baseUrl
 +    ? `${probe.baseUrl.replace(/\/$/, "")}/global/health`
 +    : null;
++  // A direct probe is a hint, not the source of truth: in this container Bun's
++  // HTTP client never completes a request to the Bun-based OpenCode server,
++  // while every OpenCode request the iPolloWork server makes on Node succeeds.
++  // Bound each attempt, then continue in a degraded state instead of hanging
++  // startup forever.
++  const probeDeadline = probe?.probeTimeoutMs
++    ? start + probe.probeTimeoutMs
++    : Number.POSITIVE_INFINITY;
++  const attemptTimeoutMs = Math.max(pollMs * 4, 1_000);
    while (Date.now() - start < timeoutMs) {
 +    if (probeUrl) {
-+      // The OpenCode SDK client scopes every request with
-+      // ?directory=<workspace>, which can stall against the managed OpenCode
-+      // server inside containers. Probe the health endpoint directly instead,
-+      // the same way `ipollowork status` does.
 +      try {
 +        const { username, password } = probe ?? {};
-+        const response = await fetch(
-+          probeUrl,
-+          username && password
++        const response = await fetch(probeUrl, {
++          ...(username && password
 +            ? {
 +                headers: {
 +                  Authorization: `Basic ${encodeBasicAuth(username, password)}`,
 +                },
 +              }
-+            : undefined,
-+        );
++            : {}),
++          signal: AbortSignal.timeout(attemptTimeoutMs),
++        });
 +        if (response.ok) return { healthy: true, degraded: false };
 +        lastError = `HTTP ${response.status}`;
 +      } catch (error) {
 +        lastError = error instanceof Error ? error.message : String(error);
++      }
++      if (Date.now() > probeDeadline) {
++        return {
++          healthy: true,
++          degraded: true,
++          reason: `direct OpenCode health probe did not answer (${lastError ?? "no response"}); continuing because the managed OpenCode process is running`,
++        };
 +      }
 +      await new Promise((resolve) => setTimeout(resolve, pollMs));
 +      continue;
@@ -45,7 +72,7 @@ index 3f9342d..1a190ae 100644
      try {
        const health = unwrap(await client.global.health());
        if (health?.healthy) return health;
-@@ -5056,7 +5086,16 @@ async function runRouterDaemon(args: ParsedArgs) {
+@@ -5056,7 +5106,16 @@ async function runRouterDaemon(args: ParsedArgs) {
          headers: authHeaders,
        });
        try {
@@ -63,7 +90,7 @@ index 3f9342d..1a190ae 100644
          if (!state.sidecar || !state.cliVersion || !state.binaries?.opencode) {
            updateDiagnostics(state.binaries?.opencode?.actualVersion);
            await saveRouterState(statePath, state);
-@@ -5097,7 +5136,11 @@ async function runRouterDaemon(args: ParsedArgs) {
+@@ -5097,7 +5156,12 @@ async function runRouterDaemon(args: ParsedArgs) {
        headers: authHeaders,
      });
      logger.info("Waiting for health", { url: baseUrl }, "opencode");
@@ -72,11 +99,12 @@ index 3f9342d..1a190ae 100644
 +      baseUrl,
 +      username: opencodeCredentials.username,
 +      password: opencodeCredentials.password,
++      probeTimeoutMs: DEGRADED_OPENCODE_PROBE_MS,
 +    });
      logger.info("Healthy", { url: baseUrl }, "opencode");
      state.opencode = {
        pid: child.pid ?? 0,
-@@ -5806,7 +5849,12 @@ async function runStatus(args: ParsedArgs) {
+@@ -5806,7 +5870,12 @@ async function runStatus(args: ParsedArgs) {
          baseUrl: opencodeUrl,
          headers,
        });
@@ -90,7 +118,7 @@ index 3f9342d..1a190ae 100644
        status.opencode = { ok: true, url: opencodeUrl, health };
      } catch (error) {
        status.opencode = { ok: false, url: opencodeUrl, error: String(error) };
-@@ -6315,6 +6363,11 @@ async function runStart(args: ParsedArgs) {
+@@ -6315,6 +6384,12 @@ async function runStart(args: ParsedArgs) {
                }
              : undefined,
        }),
@@ -98,11 +126,12 @@ index 3f9342d..1a190ae 100644
 +        baseUrl: opencodeBaseUrl,
 +        username: opencodeCredentials.username,
 +        password: opencodeCredentials.password,
++        probeTimeoutMs: DEGRADED_OPENCODE_PROBE_MS,
 +      },
      );
    };
    const restartiPolloWorkServer = async () => {
-@@ -6945,7 +6998,11 @@ async function runStart(args: ParsedArgs) {
+@@ -6945,7 +7020,12 @@ async function runStart(args: ParsedArgs) {
        });
  
        logger.info("Waiting for health", { url: opencodeBaseUrl }, "opencode");
@@ -111,6 +140,7 @@ index 3f9342d..1a190ae 100644
 +        baseUrl: opencodeBaseUrl,
 +        username: opencodeUsername,
 +        password: opencodePassword,
++        probeTimeoutMs: DEGRADED_OPENCODE_PROBE_MS,
 +      });
        logger.info("Healthy", { url: opencodeBaseUrl }, "opencode");
        tui?.updateService("opencode", { status: "healthy" });
