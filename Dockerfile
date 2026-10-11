@@ -21,7 +21,8 @@ ARG IPOLLOWORK_REF=main
 ENV DEBIAN_FRONTEND=noninteractive \
     ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
     COREPACK_ENABLE_STRICT=0 \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    pnpm_config_verify_deps_before_run=false
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -44,6 +45,10 @@ RUN pnpm --filter @ipollowork/types build \
     VITE_IPOLLOWORK_TOKEN="__IPOLLOWORK_TOKEN__" \
     pnpm --filter @ipollowork/app build
 
+# The orchestrator is self-contained when compiled, so a single binary is enough.
+# Build it before `pnpm deploy`, which rewrites the workspace's node_modules.
+RUN pnpm --filter ipollowork-orchestrator build:bin
+
 # The server must run on Node: the Bun-compiled binary cannot load sharp's
 # native module, and the server imports sharp at startup.
 RUN pnpm --filter ipollowork-server build \
@@ -54,9 +59,6 @@ RUN pnpm --filter ipollowork-server build \
 RUN cd /out/server \
  && node -e "import('sharp').then(() => console.log('sharp ok')).catch((error) => { console.error('sharp failed:', error.message); process.exit(1); })" \
  && test -f /out/server/dist/cli.js
-
-# The orchestrator is self-contained when compiled, so a single binary is enough.
-RUN pnpm --filter ipollowork-orchestrator build:bin
 
 ############################
 # Stage 2 — runtime
