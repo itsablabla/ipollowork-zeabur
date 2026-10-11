@@ -16,7 +16,9 @@
 ############################
 FROM node:22-bookworm-slim AS build
 
-ARG IPOLLOWORK_REF=main
+# Pinned upstream commit: this deployment applies patches/ on top of it, so the
+# base revision is fixed to keep the patch (and the resulting image) reproducible.
+ARG IPOLLOWORK_REF=4483434be463de3c137889e80ce38c97512478b3
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
@@ -32,8 +34,14 @@ RUN apt-get update \
  && corepack enable
 
 WORKDIR /src
-RUN git clone --depth 1 --branch "${IPOLLOWORK_REF}" \
-      https://github.com/Devin-AXIS/iPolloWork.git .
+RUN git init -q . \
+ && git remote add origin https://github.com/Devin-AXIS/iPolloWork.git \
+ && git fetch --depth 1 -q origin "${IPOLLOWORK_REF}" \
+ && git checkout -q FETCH_HEAD
+
+# Local patches against the pinned revision (see patches/README.md).
+COPY patches /tmp/patches
+RUN for p in /tmp/patches/*.patch; do git apply -v "$p"; done
 
 RUN pnpm install --frozen-lockfile
 

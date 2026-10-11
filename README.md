@@ -46,6 +46,15 @@ Two details that matter:
   --ipollowork-server-bin /opt/ipollowork/server/dist/cli.js`, otherwise it
   looks for a bundled/downloaded server binary and never starts one.
 
+## Local patches
+
+`IPOLLOWORK_REF` pins upstream to one commit and `patches/` is applied on top of
+it, so the image is reproducible and every local change is reviewable.
+`patches/README.md` documents each patch and when it can be dropped. The current
+patch replaces the orchestrator's OpenCode readiness probe: the SDK call stalls
+inside this container, so `ipollowork serve` never starts the iPolloWork server
+and the deployment answers 502 with only nginx and the SPA up.
+
 ## Required service configuration (Zeabur)
 
 - Port: `8080` (HTTP, public domain)

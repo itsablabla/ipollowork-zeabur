@@ -1,0 +1,117 @@
+diff --git a/apps/orchestrator/src/cli.ts b/apps/orchestrator/src/cli.ts
+index 3f9342d..1a190ae 100644
+--- a/apps/orchestrator/src/cli.ts
++++ b/apps/orchestrator/src/cli.ts
+@@ -2871,12 +2871,42 @@ async function waitForHealthy(
+ 
+ async function waitForOpencodeHealthy(
+   client: ReturnType<typeof createOpencodeClient>,
++  probe?: { baseUrl?: string; username?: string; password?: string },
+   timeoutMs = 10_000,
+   pollMs = 250,
+ ) {
+   const start = Date.now();
+   let lastError: string | null = null;
++  const probeUrl = probe?.baseUrl
++    ? `${probe.baseUrl.replace(/\/$/, "")}/global/health`
++    : null;
+   while (Date.now() - start < timeoutMs) {
++    if (probeUrl) {
++      // The OpenCode SDK client scopes every request with
++      // ?directory=<workspace>, which can stall against the managed OpenCode
++      // server inside containers. Probe the health endpoint directly instead,
++      // the same way `ipollowork status` does.
++      try {
++        const { username, password } = probe ?? {};
++        const response = await fetch(
++          probeUrl,
++          username && password
++            ? {
++                headers: {
++                  Authorization: `Basic ${encodeBasicAuth(username, password)}`,
++                },
++              }
++            : undefined,
++        );
++        if (response.ok) return { healthy: true, degraded: false };
++        lastError = `HTTP ${response.status}`;
++      } catch (error) {
++        lastError = error instanceof Error ? error.message : String(error);
++      }
++      await new Promise((resolve) => setTimeout(resolve, pollMs));
++      continue;
++    }
++
+     try {
+       const health = unwrap(await client.global.health());
+       if (health?.healthy) return health;
+@@ -5056,7 +5086,16 @@ async function runRouterDaemon(args: ParsedArgs) {
+         headers: authHeaders,
+       });
+       try {
+-        await waitForOpencodeHealthy(client, 2000, 200);
++        await waitForOpencodeHealthy(
++          client,
++          {
++            baseUrl: existing.baseUrl,
++            username: opencodeCredentials.username,
++            password: opencodeCredentials.password,
++          },
++          2000,
++          200,
++        );
+         if (!state.sidecar || !state.cliVersion || !state.binaries?.opencode) {
+           updateDiagnostics(state.binaries?.opencode?.actualVersion);
+           await saveRouterState(statePath, state);
+@@ -5097,7 +5136,11 @@ async function runRouterDaemon(args: ParsedArgs) {
+       headers: authHeaders,
+     });
+     logger.info("Waiting for health", { url: baseUrl }, "opencode");
+-    await waitForOpencodeHealthy(client);
++    await waitForOpencodeHealthy(client, {
++      baseUrl,
++      username: opencodeCredentials.username,
++      password: opencodeCredentials.password,
++    });
+     logger.info("Healthy", { url: baseUrl }, "opencode");
+     state.opencode = {
+       pid: child.pid ?? 0,
+@@ -5806,7 +5849,12 @@ async function runStatus(args: ParsedArgs) {
+         baseUrl: opencodeUrl,
+         headers,
+       });
+-      const health = await waitForOpencodeHealthy(client, 5000, 400);
++      const health = await waitForOpencodeHealthy(
++        client,
++        { baseUrl: opencodeUrl, username, password },
++        5000,
++        400,
++      );
+       status.opencode = { ok: true, url: opencodeUrl, health };
+     } catch (error) {
+       status.opencode = { ok: false, url: opencodeUrl, error: String(error) };
+@@ -6315,6 +6363,11 @@ async function runStart(args: ParsedArgs) {
+               }
+             : undefined,
+       }),
++      {
++        baseUrl: opencodeBaseUrl,
++        username: opencodeCredentials.username,
++        password: opencodeCredentials.password,
++      },
+     );
+   };
+   const restartiPolloWorkServer = async () => {
+@@ -6945,7 +6998,11 @@ async function runStart(args: ParsedArgs) {
+       });
+ 
+       logger.info("Waiting for health", { url: opencodeBaseUrl }, "opencode");
+-      await waitForOpencodeHealthy(opencodeClient);
++      await waitForOpencodeHealthy(opencodeClient, {
++        baseUrl: opencodeBaseUrl,
++        username: opencodeUsername,
++        password: opencodePassword,
++      });
+       logger.info("Healthy", { url: opencodeBaseUrl }, "opencode");
+       tui?.updateService("opencode", { status: "healthy" });
+ 
